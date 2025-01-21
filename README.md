@@ -32,13 +32,14 @@ file fetch in the current bash script ends up taking a huge proportion of the to
 
 ## Installation
 
-Download and copy the bash script somewhere in your PATH. In current Linux
-distributions you can put it in `~/.local/bin` which should be in `$PATH`.
+Download and copy the [mprsync.sh](mprsync.sh?raw=true) script somewhere in your PATH.
+In current Linux distributions a good place is `~/.local/bin` which should be in `$PATH`.
+Then provide execute permission to the script (`chmod +x mprsync.sh`).
 
 
 ## Usage
 
-None of the additional options added by mprsync.sh script conflict with rsync options,
+None of the additional options added by `mprsync.sh` script conflict with rsync options,
 so you can just mix match the two as required. The `--usage` option details the
 additional options:
 
