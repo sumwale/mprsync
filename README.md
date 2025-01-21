@@ -6,12 +6,12 @@ much faster over slower and/or high latency networks (e.g. backups across contin
 
 - fetches affected files in first pass with their sizes to distribute evenly among the
   parallel rsync processes
-- curates the rsync options for the first phase to avoid any unnecessary output, so you
-  can use all of rsync options
+- curates the rsync options obtained in the first phase to avoid any unnecessary output,
+  so you can use all of rsync options
 - curates the source locations for the cases of trailing slash vs without slash, with
   or without -R/--relative arguments to work correctly in all cases for the fetch file
   list of the first step (sets it apart from other similar utilities out there
-  that falter with different combinations of these options)
+  that falter with different combinations of source/destination specifications)
 - a last rsync at the end (optional) to ensure all metadata changes, deletes and any
   other remaining changes are applied
 - no dependencies other than bash, rsync and standard POSIX utilities like sed, awk;

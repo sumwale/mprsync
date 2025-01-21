@@ -20,7 +20,7 @@ fg_reset='\033[00m'
 def_num_jobs=8
 
 function usage() {
-  echo -e $fg_green
+  echo
   echo "Usage: $SCRIPT [-j JOBS|--jobs=JOBS] [--skip-full-rsync] [--silent] [--usage]"
   echo "       <rsync options> SRC... DEST"
   echo
@@ -36,7 +36,7 @@ function usage() {
   echo "                     metadata changes, or file/directory deletes are required"
   echo "  --silent           don't print any informational messages"
   echo "  --usage            show this help message and exit"
-  echo -e $fg_reset
+  echo
 }
 
 num_jobs=$def_num_jobs
