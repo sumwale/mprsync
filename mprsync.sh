@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # script to run rsync in parallel which gives it quite a large boost over long distance
-# network or even locally when a large number of files have to be synchronized between
-# a source and a destination
+# or slow networks that may remain underutilized with just a single rsync
 
 set -e
 set -o pipefail
@@ -34,7 +33,7 @@ function usage() {
   echo "  -j, --jobs=JOBS    number of parallel jobs to use (default: $def_num_jobs)"
   echo "  --skip-full-rsync  skip the full rsync at the end -- use only if no directory"
   echo "                     metadata changes, or file/directory deletes are required"
-  echo "  --silent           don't print any informational messages"
+  echo "  --silent           don't print any informational messages from $SCRIPT"
   echo "  --usage            show this help message and exit"
   echo
 }
@@ -101,7 +100,7 @@ trap "/bin/rm -f $file_prefix*" 0 1 2 3 4 5 6 11 12 15
 for opt in "${rsync_opts[@]}"; do
   if ! [[ "$opt" =~ ^--info=|^--debug=|^--progress$ ]]; then
     l_rsync_opts+=("$opt")
-    if [[ "$opt" =~ ^-[^-]*R|^--relative$ ]]; then
+    if [[ -z "$is_relative" && "$opt" =~ ^-[^-]*R|^--relative$ ]]; then
       is_relative=1
     fi
   fi
@@ -113,19 +112,22 @@ rsync "${l_rsync_opts[@]}" --no-v --dry-run --out-format="%l$sep%n" "${rsync_arg
 
 if [ $(wc -c $file_prefix | cut -d' ' -f1) -le 1 ]; then
   if [ -z "$silent" ]; then
-    echo -e "${fg_orange}No data to transfer. Will continue with metadata sync and any deletes.$fg_reset"
+    echo -e "${fg_orange}No data to transfer.$fg_reset"
+    if [ -z "$skip_full_rsync" ]; then
+      echo -e "${fg_orange}Will continue with metadata sync and any deletes.$fg_reset"
+    fi
   fi
-  rsync "${rsync_opts[@]}" "${rsync_args[@]}"
+  if [ -z "$skip_full_rsync" ]; then
+    rsync "${rsync_opts[@]}" "${rsync_args[@]}"
+  fi
   exit $?
 fi
 
-# Total the file sizes, divide by number of parallel jobs and distribute files in
-# round robin to the jobs until the total exceeds the required for the jobs.
-# Note: round robin also allows avoiding the allocating too many small files to a single
-# job in case a directory has tons of them.
+# Total the file sizes, divide by number of parallel jobs and distribute files to
+# the jobs until their size allocation exceeds that limit.
 
 AWK=awk
-type -p mawk >/dev/null && AWK=mawk
+type -p mawk >/dev/null && AWK=mawk # mawk is faster than gawk and others
 total_size=$($AWK -F $sep '{ sum += $1 } END { print sum }' $file_prefix)
 total_psize=$(( total_size / num_jobs ))
 
@@ -161,7 +163,9 @@ for idx in "${!rsync_args[@]}"; do
       rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | \
         sed -E 's#(^|:)([/.]).*#\1\2#;s#(^|:)[^/.:][^:]*$#\1.#')
     elif [[ "${rsync_args[$idx]}" != */ ]]; then
-      rsync_args[$idx]="${rsync_args[$idx]%*/*}"
+      # if the source does not end in a slash, then file list obtained above will
+      # already contain the last directory of the path, hence remove it
+      rsync_args[$idx]="${rsync_args[$idx]%/*}/"
     fi
   fi
 done
