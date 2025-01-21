@@ -21,22 +21,26 @@ def_num_jobs=8
 
 function usage() {
   echo -e $fg_green
-  echo "Usage: $SCRIPT [-j JOBS|--jobs=JOBS] [--silent] [--usage] <rsync options> SRC... DEST"
+  echo "Usage: $SCRIPT [-j JOBS|--jobs=JOBS] [--skip-full-rsync] [--silent] [--usage]"
+  echo "       <rsync options> SRC... DEST"
   echo
-  echo "Run multiple rsync instances to copy local/remote files"
+  echo "Run multiple rsync processes to copy local/remote files"
   echo
   echo "Arguments:"
-  echo "  SRC...           the source location(s) for rsync"
-  echo "  DEST             the destination location for rsync"
+  echo "  SRC...             the source location(s) for rsync"
+  echo "  DEST               the destination location for rsync"
   echo
   echo "Options:"
-  echo "  -j, --jobs=JOBS  number of parallel jobs to use (default: $def_num_jobs)"
-  echo "  --silent         don't print any informational messages"
-  echo "  --usage          show this help message and exit"
+  echo "  -j, --jobs=JOBS    number of parallel jobs to use (default: $def_num_jobs)"
+  echo "  --skip-full-rsync  skip the full rsync at the end -- use only if no directory"
+  echo "                     metadata changes, or file/directory deletes are required"
+  echo "  --silent           don't print any informational messages"
+  echo "  --usage            show this help message and exit"
   echo -e $fg_reset
 }
 
 num_jobs=$def_num_jobs
+skip_full_rsync=
 is_relative=
 # arrays allow dealing with spaces and special characters
 declare -a rsync_opts
@@ -62,6 +66,10 @@ while [ -n "$1" ]; do
         usage
         exit 1
       fi
+      shift
+      ;;
+    --skip-full-rsync)
+      skip_full_rsync=1
       shift
       ;;
     --silent)
@@ -173,9 +181,11 @@ done
 
 wait
 
-# run a final rsync to perform deletions or any metadata changes
-if [ -z "$silent" ]; then
-  echo -e "${fg_green}Running final rsync for metadata, deletions and remaining changes$fg_reset"
-  echo
+if [ -z "$skip_full_rsync" ]; then
+  # run a final rsync to perform deletions or any metadata changes
+  if [ -z "$silent" ]; then
+    echo -e "${fg_green}Running final rsync for metadata, deletions and remaining changes$fg_reset"
+    echo
+  fi
+  rsync "${rsync_opts[@]}" "${orig_rsync_args[@]}"
 fi
-rsync "${rsync_opts[@]}" "${orig_rsync_args[@]}"
