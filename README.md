@@ -10,7 +10,7 @@ much faster over slower and/or high latency networks (e.g. backups across contin
   non-desirable output, so you can use all of rsync options that will only apply to
   subsequent steps
 - curates the source locations for the cases of trailing slash vs without slash, with
-  or without -R/--relative arguments to work correctly in all cases for the fetch file
+  or without `-R/--relative` arguments to work correctly in all cases for the fetch file
   list of the first step (sets it apart from other similar utilities out there
   that falter with different combinations of source/destination specifications)
 - a last rsync at the end (optional) to ensure all metadata changes, deletes and any
@@ -34,7 +34,7 @@ file fetch in the current bash script ends up taking a huge proportion of the to
 ## Installation
 
 Download and copy the [mprsync.sh](https://github.com/sumwale/mprsync/blob/main/mprsync.sh?raw=true)
-script somewhere in your PATH. In current Linux distributions a good place is
+script somewhere in your `$PATH`. In current Linux distributions a good place is
 `~/.local/bin` which should be in `$PATH`. Then provide execute permission to the script
 (`chmod +x mprsync.sh`).
 
@@ -42,8 +42,8 @@ script somewhere in your PATH. In current Linux distributions a good place is
 ## Usage
 
 None of the additional options added by `mprsync.sh` script conflict with rsync options,
-so you can just mix match the two as required. The `--usage` option details the
-additional options:
+so you can just mix match the them with any required rsync options. The `--usage` option
+details the additional options:
 
 ```
 Usage: mprsync.sh [-j JOBS|--jobs=JOBS] [--skip-full-rsync] [--silent] [--usage]
@@ -93,4 +93,4 @@ but provides the least amount of compression. Comparitively `zstd` level 1 is a 
 more expensive than `lz4` level 1 but has much higher compression. If you need to reduce
 bandwidth usage and want to keep higher compression levels, then it is still better to
 use `zstd` levels 3-6 that usually give better compression than default gzip (`-z`)
-and then reduce the number of parallel jobs.
+with much lower CPU usage, and then reduce the number of parallel jobs.
