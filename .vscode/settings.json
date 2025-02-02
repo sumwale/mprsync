@@ -1,0 +1,11 @@
+{
+    "autoDocstring.docstringFormat": "sphinx-notypes",
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "always",
+        "source.unusedImports": "always"
+    },
+    "editor.rulers": [
+        99
+    ],
+    "editor.wordWrapColumn": 99
+}

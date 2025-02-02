@@ -1,0 +1,5 @@
+**/__pycache__/
+dist/
+.buildenv
+build/
+mprsync.egg-info

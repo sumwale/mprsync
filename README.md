@@ -16,7 +16,7 @@ much faster over slower and/or high latency networks (e.g. backups across contin
 - a last rsync at the end (optional) to ensure all metadata changes, deletes and any
   other remaining changes are applied
 - no dependencies other than bash, rsync and standard POSIX utilities like sed, awk;
-  soon to come python version will only need python >= 3.9
+  soon to come python version will only need python >= 3.10
 
 Future:
 

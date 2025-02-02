@@ -1,0 +1,7 @@
+[flake8]
+exclude = .git,.buildenv,.tox,__pycache__
+max_line_length = 99
+ignore = W504,A005
+extend-select = B90
+extend-ignore = B905,B907
+show-source = true
