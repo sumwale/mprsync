@@ -160,8 +160,13 @@ for idx in "${!rsync_args[@]}"; do
     if [ -n "$is_relative" ]; then
       # for this case the file names already have the full paths,
       # so the source should be trimmed all the way till the root (i.e. "/" or ".")
-      rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | \
-        sed -E 's#(^|:)([/.]).*#\1\2#;s#(^|:)[^/.:][^:]*$#\1.#')
+      if [[ "${rsync_args[$idx]}" = rsync://* ]]; then
+        rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | \
+          sed -E 's#(^|:)/.*#\1/#;s#(^|:)[^/:][^:]*$#\1.#')
+      else
+        rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | \
+          sed -E 's#^(rsync://[^/]*/)/.*#\1/#;s#^(rsync://[^/]*/)[^/].*$#\1.#')
+      fi
     elif [[ "${rsync_args[$idx]}" != */ ]]; then
       # if the source does not end in a slash, then file list obtained above will
       # already contain the last directory of the path, hence remove it
