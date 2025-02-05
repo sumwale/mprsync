@@ -170,7 +170,7 @@ for idx in "${!rsync_args[@]}"; do
     elif [[ "${rsync_args[$idx]}" != */ ]]; then
       # if the source does not end in a slash, then file list obtained above will
       # already contain the last directory of the path, hence remove it
-      rsync_args[$idx]="${rsync_args[$idx]%/*}/"
+      rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | sed -E 's#(^|[/:])[^/:]*#\1.#')
     fi
   fi
 done
