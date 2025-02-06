@@ -20,30 +20,31 @@ def_num_jobs=8
 
 function usage() {
   echo
-  echo "Usage: $SCRIPT [-j JOBS|--jobs=JOBS] [--skip-full-rsync] [--silent] [--usage]"
+  echo "Usage: $SCRIPT [-j JOBS|--jobs=JOBS] [--ignore-fetch-errors] [--silent] [-h|--help]"
   echo "       <rsync options> SRC... DEST"
   echo
-  echo "Run multiple rsync processes to copy local/remote files"
+  echo "Run multiple rsync processes to copy local/remote files and directories"
   echo
   echo "Arguments:"
-  echo "  SRC...             the source location(s) for rsync"
-  echo "  DEST               the destination location for rsync"
+  echo "  SRC...                 the source location(s) for rsync"
+  echo "  DEST                   the destination location for rsync"
   echo
   echo "Options:"
-  echo "  -j, --jobs=JOBS    number of parallel jobs to use (default: $def_num_jobs)"
-  echo "  --skip-full-rsync  skip the full rsync at the end -- use only if no directory"
-  echo "                     metadata changes, or file/directory deletes are required"
-  echo "  --silent           don't print any informational messages from $SCRIPT"
-  echo "  --usage            show this help message and exit"
+  echo "  -j, --jobs=JOBS        number of parallel jobs to use (default: $def_num_jobs)"
+  echo "  --ignore-fetch-errors  ignore permission or any other errors in the fetch path name"
+  echo "                         phase to continue to fetch data phase"
+  echo "  --silent               don't print any informational messages from $SCRIPT (does not"
+  echo "                         affect rsync output which is governed by its own flags)"
+  echo "  -h, --help             show this help message and exit"
   echo
 }
 
 num_jobs=$def_num_jobs
-skip_full_rsync=
+ignore_fetch_errors=
 is_relative=
 # arrays allow dealing with spaces and special characters
 declare -a rsync_opts
-declare -a l_rsync_opts # trimmed options used for listing files to be added/updated
+declare -a l_rsync_opts # trimmed options used for listing paths to be added/updated
 declare -a rsync_args
 
 while [ -n "$1" ]; do
@@ -67,15 +68,15 @@ while [ -n "$1" ]; do
       fi
       shift
       ;;
-    --skip-full-rsync)
-      skip_full_rsync=1
+    --ignore-fetch-errors)
+      ignore_fetch_errors=1
       shift
       ;;
     --silent)
       silent=1
       shift
       ;;
-    --usage)
+    -h|--help)
       usage
       exit 0
       ;;
@@ -90,13 +91,13 @@ while [ -n "$1" ]; do
   esac
 done
 
-# get the full file list and split into given number of jobs
+# get the full path list and split into given number of jobs
 
 file_prefix=$(mktemp)
 
 trap "/bin/rm -f $file_prefix*" 0 1 2 3 4 5 6 11 12 15
 
-# remove options like --info, --debug etc from file list fetch call and negate verbosity
+# remove options like --info, --debug etc from path list fetch call and negate verbosity
 for opt in "${rsync_opts[@]}"; do
   if ! [[ "$opt" =~ ^--info=|^--debug=|^--progress$ ]]; then
     l_rsync_opts+=("$opt")
@@ -105,25 +106,26 @@ for opt in "${rsync_opts[@]}"; do
     fi
   fi
 done
-sep=//// # use a separator that cannot appear in file paths
-# keep only the files to be added/updated in the parallel runs
-rsync "${l_rsync_opts[@]}" --no-v --dry-run --out-format="%l$sep%n" "${rsync_args[@]}" | \
-  { grep -Ev '^deleting |^created |^skipping |^sending incremental |/$' || true; } >> $file_prefix
+if [ -z "$ignore_fetch_errors" ]; then
+  ignore_cmd=false
+else
+  ignore_cmd=true
+fi
+
+sep=//// # use a separator that cannot appear in paths
+
+# use a fixed size of 1024 for deletes to ensure that they count towards some expense
+{ rsync "${l_rsync_opts[@]}" --no-v --dry-run --out-format="%l$sep%n" "${rsync_args[@]}" || \
+  eval $ignore_cmd; } | sed -n "s#^[0-9]\+#\0#p;s#^deleting #1024$sep#p" >> $file_prefix
 
 if [ $(wc -c $file_prefix | cut -d' ' -f1) -le 1 ]; then
   if [ -z "$silent" ]; then
     echo -e "${fg_orange}No data to transfer.$fg_reset"
-    if [ -z "$skip_full_rsync" ]; then
-      echo -e "${fg_orange}Will continue with metadata sync and any deletes.$fg_reset"
-    fi
-  fi
-  if [ -z "$skip_full_rsync" ]; then
-    rsync "${rsync_opts[@]}" "${rsync_args[@]}"
   fi
   exit $?
 fi
 
-# Total the file sizes, divide by number of parallel jobs and distribute files to
+# Total the path sizes, divide by number of parallel jobs and distribute paths to
 # the jobs until their size allocation exceeds that limit.
 
 AWK=awk
@@ -133,7 +135,7 @@ total_psize=$(( total_size / num_jobs ))
 
 if [ -z "$silent" ]; then
   readable_mb=$(bc -l <<< "scale=2; $total_size/(1024 * 1024)")
-  echo -e "${fg_green}Splitting files having $readable_mb MB of data into $num_jobs jobs$fg_reset"
+  echo -e "${fg_green}Splitting paths having $readable_mb MB of data into $num_jobs jobs$fg_reset"
 fi
 
 $AWK -F $sep -v num_jobs=$num_jobs -v total_psize=$total_psize -v file_prefix=$file_prefix '
@@ -148,8 +150,8 @@ BEGIN {
   }
 }' < $file_prefix
 
-# Adjust source paths as per expected file list received above which is that if there
-# is no trailing slash, then file list contains the last element hence remove it.
+# Adjust source paths as per expected path list received above which is that if there
+# is no trailing slash, then path list contains the last element hence remove it.
 # When -R/--relative is being used then path names provided are full names hence
 # trim the paths in the source till root "/" or "."
 orig_rsync_args=("${rsync_args[@]}")
@@ -158,7 +160,7 @@ for idx in "${!rsync_args[@]}"; do
   # skip any processing for the destination
   if [ $idx -ne $nargs_1 ]; then
     if [ -n "$is_relative" ]; then
-      # for this case the file names already have the full paths,
+      # for this case the paths already are the full paths,
       # so the source should be trimmed all the way till the root (i.e. "/" or ".")
       if [[ "${rsync_args[$idx]}" = rsync://* ]]; then
         rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | \
@@ -168,9 +170,9 @@ for idx in "${!rsync_args[@]}"; do
           sed -E 's#^(rsync://[^/]*/)/.*#\1/#;s#^(rsync://[^/]*/)[^/].*$#\1.#')
       fi
     elif [[ "${rsync_args[$idx]}" != */ ]]; then
-      # if the source does not end in a slash, then file list obtained above will
+      # if the source does not end in a slash, then path list obtained above will
       # already contain the last directory of the path, hence remove it
-      rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | sed -E 's#(^|[/:])[^/:]*#\1.#')
+      rsync_args[$idx]=$(echo "${rsync_args[$idx]}" | sed -E 's#(^|[/:])[^/:]*$#\1.#')
     fi
   fi
 done
@@ -181,20 +183,13 @@ if [ -z "$silent" ]; then
 fi
 
 for split_file in $(echo $file_prefix.*); do
-  rsync --files-from=$split_file "${rsync_opts[@]}" "${rsync_args[@]}" &
+  rsync --files-from=$split_file "${rsync_opts[@]}" --no-r "${rsync_args[@]}" &
+  # forking rsync+ssh too quickly sometimes causes trouble, so wait for sometime
   if [ $num_jobs -gt 8 ]; then
-    # forking rsync too quickly sometimes causes trouble
     sleep 0.3
+  else
+    sleep 0.1
   fi
 done
 
 wait
-
-if [ -z "$skip_full_rsync" ]; then
-  # run a final rsync to perform deletions or any metadata changes
-  if [ -z "$silent" ]; then
-    echo -e "${fg_green}Running final rsync for metadata, deletions and remaining changes$fg_reset"
-    echo
-  fi
-  rsync "${rsync_opts[@]}" "${orig_rsync_args[@]}"
-fi

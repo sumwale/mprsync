@@ -5,7 +5,7 @@ set -e
 SCRIPT="$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-check_script=mprsync/mprsync.py
+check_script=mprsync/sync.py
 fg_green='\033[32m'
 fg_reset='\033[00m'
 

@@ -31,4 +31,4 @@ Homepage = "https://github.com/sumwale/mprsync"
 Issues = "https://github.com/sumwale/mprsync/issues"
 
 [project.scripts]
-mprsync = "mprsync.mprsync:main"
+mprsync = "mprsync.sync:main"
