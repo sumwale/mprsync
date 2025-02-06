@@ -121,7 +121,7 @@ def main() -> None:
         with subprocess.Popen(rsync_fetch, bufsize=1024, stdout=subprocess.PIPE) as path_list:
             assert path_list.stdout is not None
             if not silent:
-                print_color(f"Running up to {num_jobs} parallel rsync jobs splitting paths into "
+                print_color(f"Running up to {num_jobs} parallel rsync jobs with paths split into "
                             f"{chunk_size} byte chunks (as per the sizes on source) ...", FG_GREEN)
             accumulated_size = 0  # size of the paths accumulated so far
             accumulated_paths: list[bytes] = []  # accumulated paths; drained after `chunk_size`
@@ -201,20 +201,20 @@ def _flush_accumulated(path_list_heap: list[tuple[int, int]], accumulated_size: 
                 path_list_heap.extend(popped_threads)
                 popped_threads.clear()
                 heapq.heapify(path_list_heap)
-            file_or_dir_size, thread_idx = heapq.heappop(path_list_heap)
+            path_size, thread_idx = heapq.heappop(path_list_heap)
             # check for additional size due to retries
             additional_size = retry_sizes.update(thread_idx, _zero)
             if additional_size > 0:
-                heapq.heappush(path_list_heap, (file_or_dir_size + additional_size, thread_idx))
+                heapq.heappush(path_list_heap, (path_size + additional_size, thread_idx))
             else:
                 break
         try:
             thread_queues[thread_idx].put(accumulated_paths, timeout=1.0)
-            heapq.heappush(path_list_heap, (file_or_dir_size + accumulated_size, thread_idx))
+            heapq.heappush(path_list_heap, (path_size + accumulated_size, thread_idx))
             break
         except queue.Full:
             # record the popped thread and move to the next thread on the heap (outer while loop)
-            popped_threads.append((file_or_dir_size, thread_idx))
+            popped_threads.append((path_size, thread_idx))
     if popped_threads:
         for item in popped_threads:
             heapq.heappush(path_list_heap, item)
@@ -286,14 +286,14 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
                         split_idx = path_name.find(_RSYNC_SEP)
                         # two cases: files/dirs to be updated/created and files/dirs to be deleted
                         if split_idx > 0:
-                            file_or_dir_size = max(512, int(path_name[:split_idx]))
+                            path_size = max(512, int(path_name[:split_idx]))
                             path_name = path_name[split_idx + len(_RSYNC_SEP):]
                         else:
-                            file_or_dir_size = _DELETE_SIZE
+                            path_size = _DELETE_SIZE
                             path_name = path_name[len(_DELETE_PREFIX):]
                         rsync.stdin.write(path_name)
                         tmp_file.write(path_name)
-                        tmp_file_size += file_or_dir_size
+                        tmp_file_size += path_size
                     rsync.stdin.flush()
                     _process_stderr(rsync.stderr, retry_errors)
                 rsync.stdin.close()

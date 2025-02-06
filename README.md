@@ -68,7 +68,7 @@ The `-h/--help` option details the additional options:
 
 (for bash script)
 ```
-Usage: mprsync.sh [-j JOBS|--jobs=JOBS] [--ignore-fetch-errors] [--silent] [-h|--help]
+Usage: mprsync.sh [-h|--help] [-j JOBS|--jobs=JOBS] [--ignore-fetch-errors] [--silent]
        <rsync options> SRC... DEST
 
 Run multiple rsync processes to copy local/remote files and directories
@@ -78,11 +78,11 @@ Arguments:
   DEST                   the destination location for rsync
 
 Options:
+  -h, --help             show this help message and exit
   -j, --jobs=JOBS        number of parallel jobs to use (default: 8)
   --ignore-fetch-errors  ignore permission or any other errors in the fetch path name
                          phase to continue to fetch data phase
   --silent               don't print any informational messages from mprsync.sh
-  -h, --help             show this help message and exit
 ```
 
 (for python script)
@@ -105,8 +105,11 @@ be clearer to do so. For example to run 10 parallel rsync jobs to sync data from
 remote server to local:
 
 ```sh
-mprsync.sh --jobs=10 -aH --info=progress <user>@<server>:/data/ data/
+mprsync.sh --jobs=10 -aH --info=progress2 <user>@<server>:/data/ data/
 ```
+
+Or using the python script with higher chunk size and with `zstd` compression level 1:
+
 
 ```sh
 mprsync -j 10 --chunk-size=16777216 -aH --zc=zstd --zl=1 --info=progress2 <user>@<server>:/data/ data/

@@ -20,7 +20,7 @@ def_num_jobs=8
 
 function usage() {
   echo
-  echo "Usage: $SCRIPT [-j JOBS|--jobs=JOBS] [--ignore-fetch-errors] [--silent] [-h|--help]"
+  echo "Usage: $SCRIPT [-h|--help] [-j JOBS|--jobs=JOBS] [--ignore-fetch-errors] [--silent]"
   echo "       <rsync options> SRC... DEST"
   echo
   echo "Run multiple rsync processes to copy local/remote files and directories"
@@ -30,12 +30,12 @@ function usage() {
   echo "  DEST                   the destination location for rsync"
   echo
   echo "Options:"
+  echo "  -h, --help             show this help message and exit"
   echo "  -j, --jobs=JOBS        number of parallel jobs to use (default: $def_num_jobs)"
   echo "  --ignore-fetch-errors  ignore permission or any other errors in the fetch path name"
   echo "                         phase to continue to fetch data phase"
   echo "  --silent               don't print any informational messages from $SCRIPT (does not"
   echo "                         affect rsync output which is governed by its own flags)"
-  echo "  -h, --help             show this help message and exit"
   echo
 }
 
@@ -49,6 +49,10 @@ declare -a rsync_args
 
 while [ -n "$1" ]; do
   case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
     -j|--jobs=*)
       if [ "$1" = "-j" ]; then
         num_jobs="$2"
@@ -75,10 +79,6 @@ while [ -n "$1" ]; do
     --silent)
       silent=1
       shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
       ;;
     -*)
       rsync_opts+=("$1")
