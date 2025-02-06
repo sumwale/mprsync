@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mprsync"
-version = "0.9.0"
+version = "0.9.0.post1"
 authors = [
     { name = "Sumedh Wale", email = "sumwale@yahoo.com" }
 ]
-description = "run Linux distribution inside a container"
+description = "Run multiple rsync processes in parallel for local/remote data sync"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

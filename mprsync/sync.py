@@ -122,7 +122,7 @@ def main() -> None:
             assert path_list.stdout is not None
             if not silent:
                 print_color(f"Running up to {num_jobs} parallel rsync jobs splitting paths into "
-                            f"{chunk_size} chunks ...", FG_GREEN)
+                            f"{chunk_size} byte chunks (as per the sizes on source) ...", FG_GREEN)
             accumulated_size = 0  # size of the paths accumulated so far
             accumulated_paths: list[bytes] = []  # accumulated paths; drained after `chunk_size`
             while line := path_list.stdout.readline():

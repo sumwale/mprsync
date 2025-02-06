@@ -56,7 +56,7 @@ automatically) unless the flag `--break-system-packages` is used. Since this mod
 nothing apart from python >= 3.10, you can safely use that flag with `pip`.
 
 Alternatively you can skip all this and just download the
-[sync.py](https://github.com/sumwale/mprsync/blob/main/mprsync/mprsync.py?raw=true) file, then run
+[sync.py](https://github.com/sumwale/mprsync/blob/main/mprsync/sync.py?raw=true) file, then run
 it using `python/python3`: `python3 sync.py --jobs=10 <rsync args ...>`
 
 
