@@ -107,14 +107,15 @@ def main() -> None:
     # array below is used to communicate additional path size handled by a thread due to retries
     retry_sizes = ThreadSafeArray("L", (0 for _ in range(num_jobs)))
     # futures for jobs submitted to threads
-    jobs: list[Optional[Future[int]]] = [None for _ in range(num_jobs)]
+    jobs: list[Optional[Future[tuple[int, int]]]] = [None for _ in range(num_jobs)]
     # obtain the changed path list from rsync --dry-run and distribute among the threads using
     # the min-heap above, but keep a minimum size of paths in one thread to avoid splitting
     # small files too much across threads
-    rsync_fetch = build_rsync_fetch_cmd(rsync_cmd, rsync_args)
-    rsync_process = build_rsync_process_cmd(rsync_cmd, rsync_args)
+    rsync_fetch, is_relative = build_rsync_fetch_cmd(rsync_cmd, rsync_args)
+    rsync_process = build_rsync_process_cmd(rsync_cmd, rsync_args, is_relative)
 
     failure_code = 0
+    proc_code = 0
     # executor for the rsync jobs
     with ThreadPoolExecutor(max_workers=num_jobs) as executor:
         # reduce bufsize to not wait for too many paths
@@ -134,15 +135,15 @@ def main() -> None:
                     accumulated_paths.append(line)
                     if accumulated_size >= chunk_size:
                         _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
-                                           executor, thread_queues, retry_sizes, jobs,
-                                           rsync_process, silent)
+                                           executor, thread_queues, retry_sizes, rsync_process,
+                                           jobs, silent)
                         accumulated_size = 0
                         accumulated_paths = []  # cannot reuse since it has been put in queue
             # flush any paths left over at the end
             if len(accumulated_paths) > 0:
                 _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
-                                   executor, thread_queues, retry_sizes, jobs,
-                                   rsync_process, silent)
+                                   executor, thread_queues, retry_sizes, rsync_process,
+                                   jobs, silent)
             # mark the end of objects in the thread queues
             for thread_queue in thread_queues:
                 thread_queue.put(_QUEUE_SENTINEL)
@@ -156,13 +157,19 @@ def main() -> None:
         for job_idx, job in enumerate(jobs):
             if job:
                 try:
-                    if (code := job.result()) != 0:
-                        failure_code = code
+                    if (codes := job.result())[0] != 0:
+                        failure_code = codes[0]  # the actual exit code
+                        proc_code = codes[1]  # exit code after ignoring _SKIP_RETRY_PATTERNS
                 except Exception as ex:  # pylint: disable=broad-exception-caught
                     if not silent:
                         print_error(f"Job {job_idx} generated an exception: {ex}")
                     failure_code = 1
+                    proc_code = 1
 
+    if proc_code != 0 and args.full_rsync:
+        rsync_exec = [rsync_cmd]
+        rsync_exec.extend(rsync_args)
+        failure_code = subprocess.run(rsync_exec, check=False).returncode
     if failure_code != 0:
         sys.exit(failure_code)
 
@@ -176,8 +183,8 @@ def _zero(idx: int, v: int) -> int:
 def _flush_accumulated(path_list_heap: list[tuple[int, int]], accumulated_size: int,
                        accumulated_paths: list[bytes], executor: ThreadPoolExecutor,
                        thread_queues: list[queue.Queue[list[bytes]]],
-                       retry_sizes: ThreadSafeArray[int], jobs: list[Optional[Future[int]]],
-                       rsync_process: list[str], silent: bool) -> None:
+                       retry_sizes: ThreadSafeArray[int], rsync_process: list[str],
+                       jobs: list[Optional[Future[tuple[int, int]]]], silent: bool) -> None:
     """
     Flush accumulated chunk into the queue of the thread having the smallest total size of paths
     so far. This will wait up to a second to put into the thread's queue else cycle through the
@@ -224,7 +231,7 @@ def _flush_accumulated(path_list_heap: list[tuple[int, int]], accumulated_size: 
 
 
 def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSafeArray[int],
-                  thread_idx: int, rsync_process: list[str], silent: bool) -> int:
+                  thread_idx: int, rsync_process: list[str], silent: bool) -> tuple[int, int]:
     """
     Function executed by each thread having rsync invocation with given arguments. This will also
     record the path list pushed by the main thread into the thread queue and use that to replay
@@ -239,7 +246,8 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
     :param rsync_process: complete rsync command-line (as a list of string) to be invoked
                           including full path of the rsync executable at the first index
     :param silent: if True then no message will be printed on standard output during retries
-    :return: the final exit code of rsync process (after retries, if they were required)
+    :return: tuple having the final exit code of rsync process, and the exit code after ignoring
+             the errors in `_SKIP_RETRY_PATTERNS` (after retries, if they were required)
     """
     # each thread task reads from its queue and writes to its rsync process (--files-from=-)
     # as well as to a temporary file so that the task can be restarted if the rsync process fails
@@ -255,58 +263,72 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
             if retry_index > 0:
                 # wait for sometime before retrying
                 time.sleep(1.0 * retry_index)
-                if not silent:
-                    if len(retry_errors) > 512:
-                        retry_errors = retry_errors[:512]
-                        retry_errors.extend(b" ...")
-                    print_color(f"Retry {retry_index} for job {thread_idx} due to errors:\n" +
-                                retry_errors.decode("utf-8"), FG_ORANGE)
-                retry_errors.clear()
+                if retry_errors:
+                    if not silent:
+                        if len(retry_errors) > 512:
+                            retry_errors = retry_errors[:512]
+                            retry_errors.extend(b" ...")
+                        print_color(f"Retry {retry_index} for job {thread_idx} due to errors:\n" +
+                                    retry_errors.decode("utf-8"), FG_ORANGE)
+                    retry_errors.clear()
                 if path_names is _QUEUE_SENTINEL:  # check if queue ended in previous run
                     thread_queue.put(_QUEUE_SENTINEL)
-            # reduce bufsize to not wait for too many paths
-            with subprocess.Popen(rsync_process, bufsize=1024, stdin=subprocess.PIPE,
-                                  stderr=subprocess.PIPE) as rsync:
-                assert rsync.stdin is not None
-                assert rsync.stderr is not None
-                # don't block indefinitely on stderr.readline()
-                os.set_blocking(rsync.stderr.fileno(), False)
-                if tmp_file_size:
-                    while line := tmp_file.readline():
-                        rsync.stdin.write(line)
-                    rsync.stdin.flush()
-                    _process_stderr(rsync.stderr, retry_errors)
-                    retry_sizes.update(thread_idx, lambda _, size,
-                                       delta=tmp_file_size: size + delta)
-                # one read from queue will have list of paths having up to `chunk_size` of data
-                while (path_names := thread_queue.get()) is not _QUEUE_SENTINEL:
-                    for path_name in path_names:
-                        # accumulate the size read so far to add to this thread's
-                        # additional "burden" in case of retries
-                        split_idx = path_name.find(_RSYNC_SEP)
-                        # two cases: files/dirs to be updated/created and files/dirs to be deleted
-                        if split_idx > 0:
-                            path_size = max(512, int(path_name[:split_idx]))
-                            path_name = path_name[split_idx + len(_RSYNC_SEP):]
-                        else:
-                            path_size = _DELETE_SIZE
-                            path_name = path_name[len(_DELETE_PREFIX):]
-                        rsync.stdin.write(path_name)
-                        tmp_file.write(path_name)
-                        tmp_file_size += path_size
-                    rsync.stdin.flush()
-                    _process_stderr(rsync.stderr, retry_errors)
-                rsync.stdin.close()
-                os.set_blocking(rsync.stderr.fileno(), True)  # start blocking on stderr at the end
-                _process_stderr(rsync.stderr, retry_errors)
-                if (exit_code := rsync.wait()) == 0:
-                    return 0
-                if (exit_code in (23, 24) and not retry_errors) or exit_code == 25:
-                    return exit_code
-                # read from tmp_file in the retry for tmp_file_size > 0
-                tmp_file.flush()
-                tmp_file.seek(0)
-        return exit_code
+            stderr = None
+            try:
+                # reduce bufsize to not wait for too many paths
+                with subprocess.Popen(rsync_process, bufsize=1024, stdin=subprocess.PIPE,
+                                      stderr=subprocess.PIPE) as rsync:
+                    assert rsync.stdin is not None
+                    assert rsync.stderr is not None
+                    stderr = rsync.stderr
+                    # don't block indefinitely on stderr.readline()
+                    os.set_blocking(stderr.fileno(), False)
+                    if tmp_file_size:
+                        while line := tmp_file.readline():
+                            rsync.stdin.write(line)
+                        rsync.stdin.flush()
+                        _process_stderr(stderr, retry_errors)
+                        retry_sizes.update(thread_idx, lambda _, size,
+                                           delta=tmp_file_size: size + delta)
+                    # one read from queue will have list of paths having up to `chunk_size` of data
+                    while (path_names := thread_queue.get()) is not _QUEUE_SENTINEL:
+                        for path_name in path_names:
+                            # accumulate the size read so far to add to this thread's
+                            # additional "burden" in case of retries
+                            split_idx = path_name.find(_RSYNC_SEP)
+                            # two cases:
+                            #   1) files/directories to be updated/created and
+                            #   2) files/directories to be deleted
+                            if split_idx > 0:
+                                path_size = max(512, int(path_name[:split_idx]))
+                                path_name = path_name[split_idx + len(_RSYNC_SEP):]
+                            else:
+                                path_size = _DELETE_SIZE
+                                path_name = path_name[len(_DELETE_PREFIX):]
+                            rsync.stdin.write(path_name)
+                            tmp_file.write(path_name)
+                            tmp_file_size += path_size
+                        rsync.stdin.flush()
+                        _process_stderr(stderr, retry_errors)
+                    rsync.stdin.close()
+                    # start blocking on stderr at the end
+                    os.set_blocking(stderr.fileno(), True)
+                    _process_stderr(stderr, retry_errors)
+                    if (exit_code := rsync.wait()) == 0:
+                        return 0, 0
+                    if (exit_code in (23, 24) and not retry_errors) or exit_code == 25:
+                        return exit_code, 0
+            except BrokenPipeError:
+                try:
+                    if stderr:
+                        _process_stderr(stderr, retry_errors)
+                except OSError:
+                    pass
+                print_color(f"Retrying job {thread_idx} due to broken pipe", FG_RED)
+            # read from tmp_file in the retry for tmp_file_size > 0
+            tmp_file.flush()
+            tmp_file.seek(0)
+        return exit_code, exit_code
 
 
 def _process_stderr(stderr: IO[bytes], retry_errors: bytearray) -> None:
@@ -318,13 +340,13 @@ def _process_stderr(stderr: IO[bytes], retry_errors: bytearray) -> None:
     if err_line := stderr.readline():
         while err_line:
             sys.stderr.buffer.write(err_line)
-            if not _SKIP_RETRY_PATTERNS.search(err_line):
+            if not _SKIP_RETRY_PATTERNS.search(err_line) and not err_line.isspace():
                 retry_errors.extend(err_line)
             err_line = stderr.readline()
         sys.stderr.buffer.flush()  # flush only if at least one line was output
 
 
-def build_rsync_fetch_cmd(rsync_cmd: str, args: list[str]) -> list[str]:
+def build_rsync_fetch_cmd(rsync_cmd: str, args: list[str]) -> tuple[list[str], bool]:
     """
     Build the complete rsync command-line to do the fetch of the path list from the remote/local
     host that will be determined by the user-provided rsync options. This will filter out or
@@ -335,19 +357,24 @@ def build_rsync_fetch_cmd(rsync_cmd: str, args: list[str]) -> list[str]:
 
     :param rsync_cmd: full path to the rsync executable
     :param args: user provided rsync arguments
-    :return: list of strings having the complete rsync command-line
+    :return: tuple of list of strings having the complete rsync command-line and boolean to
+             indicate whether the rsync arguments have -R/--relative option
     """
+    is_relative_re = re.compile(r"^-[^-]*R|^--relative$")
+    is_relative = False
     rsync_exec = [rsync_cmd]
     # remove options like --info, --debug etc from path list fetch call and negate verbosity
     for arg in args:
         if arg.startswith("--info=") or arg.startswith("--debug=") or arg == "--progress":
             continue
+        if not is_relative:
+            is_relative = is_relative_re.match(arg) is not None
         rsync_exec.append(arg)
     rsync_exec.extend(("--no-v", "--dry-run", f"--out-format=%l{_RSYNC_SEP.decode('utf-8')}%n"))
-    return rsync_exec
+    return rsync_exec, is_relative
 
 
-def build_rsync_process_cmd(rsync_cmd: str, args: list[str]) -> list[str]:
+def build_rsync_process_cmd(rsync_cmd: str, args: list[str], is_relative: bool) -> list[str]:
     """
     Build the complete rsync command-line that should be executed by each of the parallel rsync
     jobs assuming the paths as returned after running the rsync command returned by
@@ -359,6 +386,7 @@ def build_rsync_process_cmd(rsync_cmd: str, args: list[str]) -> list[str]:
 
     :param rsync_cmd: full path to the rsync executable
     :param args: user provided rsync arguments
+    :param is_relative: if rsync arguments have -R/--relative option
     :return: list of strings having the complete rsync command-line
     """
     # Adjust source paths as per expected path list received above which is that if there
@@ -366,7 +394,7 @@ def build_rsync_process_cmd(rsync_cmd: str, args: list[str]) -> list[str]:
     # When -R/--relative is being used then path names provided are full names hence
     # trim the paths in the source till root "/" or "."
     rsync_process = [rsync_cmd]
-    is_relative_re = re.compile(r"^-[^-]*R|^--relative$")
+    skip_next_arg_re = re.compile(r"^-[^-]*[efBMT@]$")  # options that take next argument as value
     trim_for_relpath = re.compile(r"(^|:)([^:]).*$")
     trim_url_for_relpath = re.compile(r"^(rsync://[^/]*/)(.).*")
     trim_for_noslash = re.compile(r"(^|[/:])[^/:]*$")
@@ -376,16 +404,21 @@ def build_rsync_process_cmd(rsync_cmd: str, args: list[str]) -> list[str]:
 
     # track and process previous arg since the last positional arg of destination has to be skipped
     prev_arg = ""
-    is_relative = False
+    skip_next_arg_process = False
     has_delete = False
     for arg in args:
-        if len(arg) == 0 or arg[0] == "-":
+        if skip_next_arg_process or len(arg) == 0:
+            rsync_process.append(arg)
+            skip_next_arg_process = False
+            continue
+        if arg[0] == "-":
             rsync_process.append(arg)
             if arg.startswith("--delete"):
                 if not has_delete and arg != "--delete-missing-args":
                     has_delete = True
-            elif not is_relative:
-                is_relative = is_relative_re.match(arg) is not None
+            # check options that take next argument as value
+            elif skip_next_arg_re.match(arg):
+                skip_next_arg_process = True
             continue
         if prev_arg:
             if is_relative:
@@ -452,6 +485,9 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("-j", "--jobs", type=int, default=8, help="number of parallel jobs to use")
     parser.add_argument("--chunk-size", type=int, default=8 * 1024 * 1024,
                         help="minimum chunk size (in bytes) for splitting paths among the jobs")
+    parser.add_argument("--full-rsync", action="store_true",
+                        help="run a full rsync at the end if any of the rsync processes failed "
+                             "with unexpected errors")
     parser.add_argument("--silent", action="store_true",
                         help="don't print any informational messages from this program (does not "
                              "affect rsync output which is governed by its own flags)")

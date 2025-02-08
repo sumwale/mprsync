@@ -96,6 +96,8 @@ options:
   -j JOBS, --jobs JOBS  number of parallel jobs to use
   --chunk-size CHUNK_SIZE
                         minimum chunk size (in bytes) for splitting paths among the jobs
+  --full-rsync          run a full rsync at the end if any of the rsync processes failed
+                        with unexpected errors
   --silent              don't print any informational messages from this program (does not
                         affect rsync output which is governed by its own flags)
 ```
@@ -138,3 +140,7 @@ more expensive than `lz4` level 1 but has much higher compression. If you need t
 bandwidth usage and want to keep higher compression levels, then it is still better to
 use `zstd` levels 3-6 that usually give better compression than default gzip (`-z`)
 with much lower CPU usage, and then reduce the number of parallel jobs.
+
+A note about SSH options: you might get better performance when using SSH transport using AES-GCM
+ciphers when client and server support AES-NI acceleration (`grep -w aes /proc/cpuinfo`) like:
+`mprsync ... --zc=zstd --zl=1 -e "ssh -o Compression=no -c aes256-gcm@openssh.com" ...`
