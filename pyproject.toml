@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mprsync"
-version = "0.9.0.post1"
+version = "0.9.1"
 authors = [
     { name = "Sumedh Wale", email = "sumwale@yahoo.com" }
 ]
