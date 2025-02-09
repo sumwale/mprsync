@@ -35,11 +35,10 @@ _DELETE_SIZE = 1024  # give a fixed size of 1024 for all deletes to ensure they 
 _SKIP_RETRY_PATTERNS = re.compile(
     b"Permission denied|Operation not permitted|No such file or directory|file has vanished|"
     b"some files vanished|skipping file deletion|some files/attrs were not transferred")
+_T = TypeVar("_T", int, float, str)
 
-T = TypeVar("T", int, float, str)
 
-
-class ThreadSafeArray(Generic[T]):
+class ThreadSafeArray(Generic[_T]):
     """
     Simple wrapper class for fixed size :class:`array.array` that provides just a few methods
     (get/set/update/len) that are synchronized with a lock to allow for thread-safe operations.
@@ -47,7 +46,7 @@ class ThreadSafeArray(Generic[T]):
     :param Generic: type of the values in the array which must be supported by :class:`array.array`
     """
 
-    def __init__(self, typecode: str, initializer: Iterable[T]):
+    def __init__(self, typecode: str, initializer: Iterable[_T]):
         self._lock = threading.Lock()  # used to lock the array before read/update
         self._array = array.array(typecode, initializer)  # the underlying array
 
@@ -55,22 +54,22 @@ class ThreadSafeArray(Generic[T]):
         """get the length of the array using the builtin `len()` function"""
         return len(self._array)
 
-    def __getitem__(self, index: int) -> T:
+    def __getitem__(self, index: int) -> _T:
         """array index operator `[]` to get the value"""
         with self._lock:
             return self._array[index]
 
-    def __setitem__(self, index: int, value: T) -> None:
+    def __setitem__(self, index: int, value: _T) -> None:
         """array index operator `[]` to set the value"""
         with self._lock:
             self._array[index] = value
 
-    def update(self, index: int, update_fn: Callable[[int, T], T]) -> T:
+    def update(self, index: int, update_fn: Callable[[int, _T], _T]) -> _T:
         """
         Update the value at given index of the array using a function/lambda that takes two
-        arguments: the index of the array and current value at that index. Note that you should
-        not invoke any of the get/set array operations for the same array inside the callable
-        directly else it will lead to a deadlock.
+        arguments: the index of the array and current value at that index. Note that it should
+        not invoke any of the get/set array operations for the same array inside directly else
+        it will lead to a deadlock.
 
         :param index: the index of the array to update
         :param update_fn: function/lambda that takes array index and current value at the index as
@@ -114,8 +113,8 @@ def main() -> None:
     rsync_fetch, is_relative = build_rsync_fetch_cmd(rsync_cmd, rsync_args)
     rsync_process = build_rsync_process_cmd(rsync_cmd, rsync_args, is_relative)
 
-    failure_code = 0
-    proc_code = 0
+    failure_code = 0  # overall exit code of this script
+    proc_code = 0  # exit code (the "worst" one) from the parallel rsync threads
     # executor for the rsync jobs
     with ThreadPoolExecutor(max_workers=num_jobs) as executor:
         # reduce bufsize to not wait for too many paths
@@ -140,12 +139,13 @@ def main() -> None:
                         accumulated_size = 0
                         accumulated_paths = []  # cannot reuse since it has been put in queue
             # flush any paths left over at the end
-            if len(accumulated_paths) > 0:
+            if accumulated_paths:
                 _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
                                    executor, thread_queues, retry_sizes, rsync_process,
                                    jobs, silent)
             # mark the end of objects in the thread queues
             for thread_queue in thread_queues:
+                # can skip empty jobs but the saving will be minuscule
                 thread_queue.put(_QUEUE_SENTINEL)
 
             if (failure_code := path_list.wait(60)) != 0:
@@ -159,7 +159,8 @@ def main() -> None:
                 try:
                     if (codes := job.result())[0] != 0:
                         failure_code = codes[0]  # the actual exit code
-                        proc_code = codes[1]  # exit code after ignoring _SKIP_RETRY_PATTERNS
+                        if proc_code == 0:
+                            proc_code = codes[1]  # exit code after ignoring _SKIP_RETRY_PATTERNS
                 except Exception as ex:  # pylint: disable=broad-exception-caught
                     if not silent:
                         print_error(f"Job {job_idx} generated an exception: {ex}")
@@ -167,6 +168,9 @@ def main() -> None:
                     proc_code = 1
 
     if proc_code != 0 and args.full_rsync:
+        if not silent:
+            print_color("Running full rsync due to unexpected error(s) in the parallel rsync run",
+                        FG_GREEN)
         rsync_exec = [rsync_cmd]
         rsync_exec.extend(rsync_args)
         failure_code = subprocess.run(rsync_exec, check=False).returncode
@@ -194,8 +198,7 @@ def _flush_accumulated(path_list_heap: list[tuple[int, int]], accumulated_size: 
     # holds threads that were popped from heap but timed out in queue put
     popped_threads: list[tuple[int, int]] = []
     # Pop the min value from heap, add size to min value, push the paths into the queue for the
-    # selected thread and then push it back to the heap.
-    # Also take care of:
+    # selected thread and then push it back to the heap. Also take care of:
     #   1) if there is an additional size to be added to thread due to retry, then add that after
     #      the first pop, then retry
     #   2) if put into queue times out after one second, then record it to be pushed at the end
@@ -265,7 +268,7 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
                 time.sleep(1.0 * retry_index)
                 if retry_errors:
                     if not silent:
-                        if len(retry_errors) > 512:
+                        if len(retry_errors) > 512:  # trim displayed error string to a max size
                             retry_errors = retry_errors[:512]
                             retry_errors.extend(b" ...")
                         print_color(f"Retry {retry_index} for job {thread_idx} due to errors:\n" +
@@ -324,7 +327,7 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
                         _process_stderr(stderr, retry_errors)
                 except OSError:
                     pass
-                print_color(f"Retrying job {thread_idx} due to broken pipe", FG_RED)
+                print_error(f"Retrying job {thread_idx} due to broken pipe")
             # read from tmp_file in the retry for tmp_file_size > 0
             tmp_file.flush()
             tmp_file.seek(0)
@@ -365,11 +368,9 @@ def build_rsync_fetch_cmd(rsync_cmd: str, args: list[str]) -> tuple[list[str], b
     rsync_exec = [rsync_cmd]
     # remove options like --info, --debug etc from path list fetch call and negate verbosity
     for arg in args:
-        if arg.startswith("--info=") or arg.startswith("--debug=") or arg == "--progress":
-            continue
-        if not is_relative:
-            is_relative = is_relative_re.match(arg) is not None
-        rsync_exec.append(arg)
+        if not (arg.startswith("--info=") or arg.startswith("--debug=") or arg == "--progress"):
+            is_relative = is_relative or (is_relative_re.match(arg) is not None)
+            rsync_exec.append(arg)
     rsync_exec.extend(("--no-v", "--dry-run", f"--out-format=%l{_RSYNC_SEP.decode('utf-8')}%n"))
     return rsync_exec, is_relative
 
@@ -407,7 +408,7 @@ def build_rsync_process_cmd(rsync_cmd: str, args: list[str], is_relative: bool) 
     skip_next_arg_process = False
     has_delete = False
     for arg in args:
-        if skip_next_arg_process or len(arg) == 0:
+        if skip_next_arg_process or not arg:
             rsync_process.append(arg)
             skip_next_arg_process = False
             continue
