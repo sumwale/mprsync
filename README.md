@@ -144,3 +144,78 @@ with much lower CPU usage, and then reduce the number of parallel jobs.
 A note about SSH options: you might get better performance when using SSH transport using AES-GCM
 ciphers when client and server support AES-NI acceleration (`grep -w aes /proc/cpuinfo`) like:
 `mprsync ... --zc=zstd --zl=1 -e "ssh -o Compression=no -c aes256-gcm@openssh.com" ...`
+
+### Some numbers
+
+Here is a brief comparison of python mprsync vs mprsync.sh vs rsync on a 200Mbps link
+pulling data from a backup from across continent (Europe to Asia). The local destination
+is empty for all these runs.
+
+This first one is around 13.1GB of data having 442K files most of which are small.
+
+python mprsync:
+```
+> time python3 mprsync/sync.py -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
+Using rsync executable from /usr/bin/rsync
+Running up to 10 parallel rsync jobs with paths split into 8388608 byte chunks (as per the sizes on source) ...
+...
+Executed in  385.86 secs    fish           external
+```
+
+mprsync.sh:
+```
+> time mprsync.sh -j 10 --ignore-fetch-errors --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
+Fetching the list of paths to be updated and/or deleted ...
+...
+Executed in  456.80 secs    fish           external
+```
+
+rsync:
+```
+> time rsync --info=progress2 --zc=zstd --zl=8 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
+...
+Executed in   17.47 mins    fish           external
+```
+
+For this case the python version is about 1.2X faster than the bash version and about 2.7X
+faster than plain rsync. The 200Mbps link is more than 90% saturated for both the python
+and bash scripts once the parallel rsync processes start (except at the tail end), while
+it is less than 30% full with rsync for most of the run but it covers up some of the loss
+due to higher compression and doing the sync in a single pass.
+
+
+The second comparison is for video and picture data of around 13.1GB where the number of
+files is only 743. The data is not compressible but the same flags are used as above
+(since that is how most users will run these when the type of data is not known) which
+does not affect the numbers in any significant way for any of the runs.
+
+python mprsync:
+```
+> time python3 ~/projects/mprsync/mprsync/sync.py -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" sumedh@$BORG_BACKUP_SERVER:vids/ vids/
+Using rsync executable from /usr/bin/rsync
+Running up to 10 parallel rsync jobs with paths split into 8388608 byte chunks (as per the sizes on source) ...
+...
+Executed in  617.28 secs    fish           external
+```
+
+mprsync.sh:
+```
+> time ~/projects/mprsync/mprsync.sh -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
+
+Splitting paths having 13145.65 MB of data into 10 jobs
+Running 10 parallel rsync jobs...
+...
+Executed in  614.17 secs    fish           external
+```
+
+rsync:
+```
+> time rsync --info=progress2 --zc=zstd --zl=8 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
+...
+Executed in   18.51 mins    fish           external
+```
+
+Here the python and bash scripts are similar and about 1.8X faster than plain rsync.
+This is to be expected since the python script has an advantage due to pipelining of
+path list fetch and parallel rsync data fetch phases, and the first phase has very little
+cost for this case.

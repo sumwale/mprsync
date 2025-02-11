@@ -30,6 +30,7 @@ _RSYNC_SEP = b"////"  # use a separator that cannot appear in paths
 _QUEUE_SENTINEL = [b""]  # marks the end of objects being pushed in a thread queue
 _DELETE_PREFIX = b"deleting "  # indicator used by rsync for files/directories to be deleted
 _DELETE_SIZE = 1024  # give a fixed size of 1024 for all deletes to ensure they have some expense
+_SLASH_ORD = ord("/")  # cache integer for slash
 # don't retry rsync threads if the only errors are those that match these patterns
 # (these correspond to error codes 23 and 24 at the end)
 _SKIP_RETRY_PATTERNS = re.compile(
@@ -308,6 +309,11 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
                             else:
                                 path_size = _DELETE_SIZE
                                 path_name = path_name[len(_DELETE_PREFIX):]
+                            # remove trailing slash for directories which causes threads
+                            # to overwrite files in the directory for some reason
+                            # (includes trailing newline so cannot do a simple rstrip)
+                            if path_name[-2] == _SLASH_ORD:
+                                path_name = path_name[:-2] + b"\n"
                             rsync.stdin.write(path_name)
                             tmp_file.write(path_name)
                             tmp_file_size += path_size

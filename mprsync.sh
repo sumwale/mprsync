@@ -114,8 +114,10 @@ if [ $silent -eq 0 ]; then
   echo -e "${fg_green}Fetching the list of paths to be updated and/or deleted ...$fg_reset"
 fi
 # use a fixed size of 1024 for deletes to ensure that they count towards some expense
-{ rsync "${l_rsync_args[@]}" --no-v --dry-run --out-format="%l$sep%n" || \
-  eval $ignore_cmd; } | sed -n "s#^[0-9]\+#\0#p;s#^deleting #1024$sep#p" >> $file_prefix
+# (trailing slash for directories causes trouble for some reason with more than one
+#  thread trying to update the files in the directory, so remove that)
+{ rsync "${l_rsync_args[@]}" --no-v --dry-run --out-format="%l$sep%n" || eval $ignore_cmd; } | \
+  sed -n "/^[0-9]\+/p;s,^deleting ,1024$sep,p" | sed 's,/$,,' >> $file_prefix
 
 if [ $(wc -c $file_prefix | cut -d' ' -f1) -le 1 ]; then
   if [ $silent -eq 0 ]; then
