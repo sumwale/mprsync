@@ -191,7 +191,7 @@ does not affect the numbers in any significant way for any of the runs.
 
 python mprsync:
 ```
-> time python3 ~/projects/mprsync/mprsync/sync.py -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" sumedh@$BORG_BACKUP_SERVER:vids/ vids/
+> time python3 mprsync/sync.py -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" sumedh@$BORG_BACKUP_SERVER:vids/ vids/
 Using rsync executable from /usr/bin/rsync
 Running up to 10 parallel rsync jobs with paths split into 8388608 byte chunks (as per the sizes on source) ...
 ...
@@ -200,7 +200,7 @@ Executed in  617.28 secs    fish           external
 
 mprsync.sh:
 ```
-> time ~/projects/mprsync/mprsync.sh -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
+> time mprsync.sh -j 10 --info=progress2 --zc=zstd --zl=1 --delete -aHSOJ -e "ssh -o Compression=no -c aes256-gcm@openssh.com" <remote source> <local destination>
 
 Splitting paths having 13145.65 MB of data into 10 jobs
 Running 10 parallel rsync jobs...
