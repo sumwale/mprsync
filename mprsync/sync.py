@@ -463,8 +463,8 @@ def print_color(msg: str, fg: Optional[str] = None, end: str = "\n") -> None:
     """
     if fg:
         msg = f"{fg}{msg}{FG_RESET}"
-    # force flush the output if it doesn't end in a newline
-    print(msg, end=end, flush=end != "\n")
+    # always flush else the message comes out too late
+    print(msg, end=end, flush=True)
 
 
 def print_error(msg: str, end: str = "\n") -> None:
