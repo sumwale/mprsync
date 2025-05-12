@@ -26,10 +26,10 @@ There are two versions provided: a bash script `mprsync.sh` and a python module 
     each job so far (e.g. prioritize the job with smallest total size so far)
   * take care of grouping paths together into `chunk-size` (as per their fetched sizes) so
     that small files (probably in the same directory) do not get strewn across multiple jobs
-  * cycles chunks other threads if the selected thread is slow to empty its queue
+  * cycles chunks to other threads if a thread is slow to empty its queue
   * up to 2 retries (i.e. total of 3 tries) for each thread rsync job in case it fails due to
     an unexpected reason; permission errors and the like do not count for "unexpected" which
-    is determined using a combination of the rsync exit code and it standard error messages
+    is determined using a combination of the rsync exit code and the standard error messages
 
 Due to above additional features, the python version should be faster over slow networks when the
 number of paths is quite large and the fetch phase ends of taking a significant proportion of the
@@ -63,7 +63,7 @@ it using `python/python3`: `python3 sync.py --jobs=10 <rsync args ...>`
 ## Usage
 
 None of the additional options added by `mprsync/mprsync.sh` (apart from `-h/--help`) conflict
-with rsync options, so you can just mix match the them with any required rsync options.
+with rsync options, so you can just mix match them with any required rsync options.
 The `-h/--help` option details the additional options:
 
 (for bash script)
@@ -138,12 +138,13 @@ of compression. Using `lz4` will be fastest (at its default of compression level
 but provides the least amount of compression. Comparitively `zstd` level 1 is a bit
 more expensive than `lz4` level 1 but has much higher compression. If you need to reduce
 bandwidth usage and want to keep higher compression levels, then it is still better to
-use `zstd` levels 3-6 that usually give better compression than default gzip (`-z`)
+use `zstd` levels 3-6 that usually give better compression than gzip (`-z`)
 with much lower CPU usage, and then reduce the number of parallel jobs.
 
 A note about SSH options: you might get better performance when using SSH transport using AES-GCM
 ciphers when client and server support AES-NI acceleration (`grep -w aes /proc/cpuinfo`) like:
 `mprsync ... --zc=zstd --zl=1 -e "ssh -o Compression=no -c aes256-gcm@openssh.com" ...`
+
 
 ### Some numbers
 
