@@ -38,6 +38,8 @@ _SKIP_RETRY_PATTERNS = re.compile(
     b"some files vanished|skipping file deletion|some files/attrs were not transferred")
 _T = TypeVar("_T", int, float, str)
 
+__thread_interrupt = False  # pylint: disable=invalid-name
+
 
 class ThreadSafeArray(Generic[_T]):
     """
@@ -104,7 +106,7 @@ def main() -> None:
     heapq.heapify(path_size_heap)
     # queues to communicate list of paths to each job
     thread_queues = [queue.Queue[list[bytes]](maxsize=8192) for _ in range(num_jobs)]
-    # array below is used to communicate additional path size handled by a thread due to retries
+    # array used to communicate additional path size handled by a thread due to retries
     retry_sizes = ThreadSafeArray("L", (0 for _ in range(num_jobs)))
     # futures for jobs submitted to threads
     jobs: list[Optional[Future[tuple[int, int]]]] = [None for _ in range(num_jobs)]
@@ -124,35 +126,39 @@ def main() -> None:
             if not silent:
                 print_color(f"Running up to {num_jobs} parallel rsync jobs with paths split into "
                             f"{chunk_size} byte chunks (as per the sizes on source) ...", FG_GREEN)
-            accumulated_size = 0  # size of the paths accumulated so far
-            accumulated_paths: list[bytes] = []  # accumulated paths; drained after `chunk_size`
-            while line := path_list.stdout.readline():
-                # add deletes to the path list too
-                if (split_idx := line.find(_RSYNC_SEP)) > 0 or line.startswith(_DELETE_PREFIX):
-                    # keep minimum size of 512 since small files cause disproportionate load
-                    accumulated_size += max(512, int(line[:split_idx])) if split_idx > 0 \
-                        else _DELETE_SIZE
-                    accumulated_paths.append(line)
-                    if accumulated_size >= chunk_size:
-                        _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
-                                           executor, thread_queues, retry_sizes, rsync_process,
-                                           jobs, silent)
-                        accumulated_size = 0
-                        accumulated_paths = []  # cannot reuse since it has been put in queue
-            # flush any paths left over at the end
-            if accumulated_paths:
-                _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
-                                   executor, thread_queues, retry_sizes, rsync_process,
-                                   jobs, silent)
-            # mark the end of objects in the thread queues
-            for thread_queue in thread_queues:
-                # can skip empty jobs but the saving will be minuscule
-                thread_queue.put(_QUEUE_SENTINEL)
+            try:
+                accumulated_size = 0  # size of the paths accumulated so far
+                accumulated_paths: list[bytes] = []  # accumulated paths; drained after `chunk_size`
+                while line := path_list.stdout.readline():
+                    # add deletes to the path list too
+                    if (split_idx := line.find(_RSYNC_SEP)) > 0 or line.startswith(_DELETE_PREFIX):
+                        # keep minimum size of 512 since small files cause disproportionate load
+                        accumulated_size += max(512, int(line[:split_idx])) if split_idx > 0 \
+                            else _DELETE_SIZE
+                        accumulated_paths.append(line)
+                        if accumulated_size >= chunk_size:
+                            _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
+                                               executor, thread_queues, retry_sizes, rsync_process,
+                                               jobs, silent)
+                            accumulated_size = 0
+                            accumulated_paths = []  # cannot reuse since it has been put in queue
+                # flush any paths left over at the end
+                if accumulated_paths:
+                    _flush_accumulated(path_size_heap, accumulated_size, accumulated_paths,
+                                       executor, thread_queues, retry_sizes, rsync_process,
+                                       jobs, silent)
+                # mark the end of objects in the thread queues
+                for thread_queue in thread_queues:
+                    # can skip empty jobs but the saving will be minuscule
+                    thread_queue.put(_QUEUE_SENTINEL)
 
-            if (failure_code := path_list.wait(60)) != 0:
-                if not silent:
-                    print_error(f"Errors in obtaining changed paths using {rsync_fetch} "
-                                "-- check the output above")
+                if (failure_code := path_list.wait(60)) != 0:
+                    if not silent:
+                        print_error(f"Errors in obtaining changed paths using {rsync_fetch} "
+                                    "-- check the output above")
+            except KeyboardInterrupt:
+                path_list.terminate()
+                _interrupt(jobs, thread_queues)
 
         # wait for all threads to finish
         for job_idx, job in enumerate(jobs):
@@ -162,6 +168,10 @@ def main() -> None:
                         failure_code = codes[0]  # the actual exit code
                         if proc_code == 0:
                             proc_code = codes[1]  # exit code after ignoring _SKIP_RETRY_PATTERNS
+                except KeyboardInterrupt:
+                    _interrupt(jobs, thread_queues)
+                    failure_code = 1
+                    proc_code = 0  # don't try to run full rsync
                 except Exception as ex:  # pylint: disable=broad-exception-caught
                     if not silent:
                         print_error(f"Job {job_idx} generated an exception: {ex}")
@@ -177,6 +187,18 @@ def main() -> None:
         failure_code = subprocess.run(rsync_exec, check=False).returncode
     if failure_code != 0:
         sys.exit(failure_code)
+
+
+def _interrupt(jobs: list[Optional[Future[tuple[int, int]]]],
+               thread_queues: list[queue.Queue[list[bytes]]]) -> None:
+    """set global interrupt flag to terminate rsync processes and push `_QUEUE_SENTINEL`"""
+    global __thread_interrupt  # pylint: disable=global-statement
+    __thread_interrupt = True
+    for job in jobs:
+        if job:
+            job.cancel()
+    for thread_queue in thread_queues:
+        thread_queue.put(_QUEUE_SENTINEL)
 
 
 def _zero(idx: int, v: int) -> int:
@@ -264,9 +286,13 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
         retry_errors = bytearray()  # keep the error strings from rsync that can cause retries
         # retry up to 3 times if there is an error (e.g. due to fast ssh spawn, or connection fail)
         for retry_index in range(3):
+            if __thread_interrupt:
+                return 1, 0  # latter is 0 to avoid full rsync at the end
             if retry_index > 0:
                 # wait for sometime before retrying
                 time.sleep(1.0 * retry_index)
+                if __thread_interrupt:
+                    return 1, 0  # latter is 0 to avoid full rsync at the end
                 if retry_errors:
                     if not silent:
                         if len(retry_errors) > 512:  # trim displayed error string to a max size
@@ -275,7 +301,7 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
                         print_color(f"Retry {retry_index} for job {thread_idx} due to errors:\n" +
                                     retry_errors.decode("utf-8"), FG_ORANGE)
                     retry_errors.clear()
-                if path_names is _QUEUE_SENTINEL:  # check if queue ended in previous run
+                if path_names is _QUEUE_SENTINEL:  # check if the queue ended in the previous run
                     thread_queue.put(_QUEUE_SENTINEL)
             stderr = None
             try:
@@ -331,8 +357,10 @@ def _thread_rsync(thread_queue: queue.Queue[list[bytes]], retry_sizes: ThreadSaf
                 try:
                     if stderr:
                         _process_stderr(stderr, retry_errors)
-                except OSError:
+                except (OSError, ValueError):
                     pass
+                if __thread_interrupt:
+                    return 1, 0  # latter is 0 to avoid full rsync at the end
                 print_error(f"Retrying job {thread_idx} due to broken pipe")
             # read from tmp_file in the retry for tmp_file_size > 0
             tmp_file.flush()

@@ -44,8 +44,9 @@ ignore_fetch_errors=0
 silent=0
 is_relative=0
 # arrays allow dealing with spaces and special characters
-declare -a l_rsync_args # trimmed arguments used for listing paths to be added/updated
+declare -a l_rsync_args  # trimmed arguments used for listing paths to be added/updated
 declare -a rsync_args
+declare -a rsync_pids
 
 while [ -n "$1" ]; do
   case "$1" in
@@ -91,7 +92,16 @@ done
 
 file_prefix=$(mktemp)
 
-trap "/bin/rm -f $file_prefix*" 0 1 2 3 4 5 6 11 12 15
+function cleanup() {
+  if [ ${#rsync_pids[@]} -ne 0 ]; then
+    kill -TERM ${rsync_pids[@]} 2>/dev/null
+    sleep 2
+    rsync_pids=()
+  fi
+  /bin/rm -f $(compgen -G "$file_prefix*")
+}
+
+trap "cleanup" 0 1 2 3 4 5 6 11 12 15
 
 # remove options like --info, --debug etc from path list fetch call and negate verbosity
 for arg in "${rsync_args[@]}"; do
@@ -108,7 +118,7 @@ else
   ignore_cmd=true
 fi
 
-sep=//// # use a separator that cannot appear in paths
+sep=////  # use a separator that cannot appear in paths
 
 if [ $silent -eq 0 ]; then
   echo -e "${fg_green}Fetching the list of paths to be updated and/or deleted ...$fg_reset"
@@ -130,7 +140,7 @@ fi
 # the jobs until their size allocation exceeds that limit.
 
 AWK=awk
-type -p mawk >/dev/null && AWK=mawk # mawk is faster than gawk and others
+type -p mawk >/dev/null && AWK=mawk  # mawk is faster than gawk and others
 total_size=$($AWK -F $sep '{ sum += $1 } END { print sum }' $file_prefix)
 total_psize=$(( total_size / num_jobs ))
 
@@ -200,6 +210,7 @@ fi
 for split_file in $(echo $file_prefix.*); do
   # add --ignore-missing-args in case of deletes which will have those files-from missing on source
   rsync "${rsync_args[@]}" --no-r --files-from=$split_file --ignore-missing-args &
+  rsync_pids+=($!)
   # forking rsync+ssh too quickly sometimes causes trouble, so wait for sometime
   if [ $num_jobs -gt 8 ]; then
     sleep 0.3
@@ -209,3 +220,7 @@ for split_file in $(echo $file_prefix.*); do
 done
 
 wait
+
+exit_code=$?
+rsync_pids=()
+exit $exit_code

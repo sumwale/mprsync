@@ -1,4 +1,4 @@
 [flake8]
 exclude = .git,.buildenv,__pycache__
-max_line_length = 99
+max_line_length = 100
 show-source = true
